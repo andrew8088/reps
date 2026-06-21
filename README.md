@@ -16,5 +16,6 @@ python3 -m http.server
 
 ## Deploy
 
-Pushing to `main` triggers `.github/workflows/pages.yml`, which publishes the site
-to GitHub Pages.
+Hosted on GitHub Pages, served from the `main` branch root. Pushing to `main`
+updates the live site automatically. Enabled once via **Settings → Pages →
+Build and deployment → Source: Deploy from a branch → `main` / `/ (root)`**.
