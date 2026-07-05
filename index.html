@@ -125,8 +125,10 @@
   .progress .bar{height:100%;background:var(--accent);transition:width .25s;border-radius:3px}
   .rev-meta{font-size:12px;color:var(--muted);text-align:center}
   .rev-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:26px 18px;min-height:44vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:10px}
+  .rev-card.initials-review{align-items:stretch;text-align:left}
   .rev-prompt{font-size:24px;line-height:1.45;font-weight:500}
   .rev-answer-body{font-size:22px;line-height:1.45}
+  .initials-review .rev-prompt,.initials-review .rev-answer-body{white-space:pre-wrap;text-align:left}
   .rev-divider{width:64px;height:2px;background:var(--border);margin:14px auto}
   .rev-hint{font-size:12px;color:var(--muted);margin-top:6px}
   .cloze-blank{color:var(--accent);font-weight:700;border-bottom:2px solid var(--accent);padding:0 5px;border-radius:2px}
@@ -771,13 +773,14 @@ function renderReviewCard(deck, item, card){
   setTopbar({ title: '', back: '/deck/' + deck.id });
 
   let promptHtml, answerHtml;
+  const reviewClass = card.type === 'initials' ? ' initials-review' : '';
   if (card.type === 'cloze') {
     promptHtml = renderCloze(card.text, item.clozeIndex, false);
     answerHtml = renderCloze(card.text, item.clozeIndex, true);
   } else if (card.type === 'initials') {
     const source = initialsSource(card);
-    promptHtml = renderText(card.front || initialsPrompt(source));
-    answerHtml = renderText(source);
+    promptHtml = esc(card.front || initialsPrompt(source));
+    answerHtml = esc(source);
   } else {
     promptHtml = renderText(card.front);
     answerHtml = renderText(card.back);
@@ -792,7 +795,7 @@ function renderReviewCard(deck, item, card){
     <div class="review">
       <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
       <div class="rev-meta">${done} done &middot; ${remaining} left</div>
-      <div class="rev-card" data-reveal tabindex="0" role="button" aria-label="Show answer">
+      <div class="rev-card${reviewClass}" data-reveal tabindex="0" role="button" aria-label="Show answer">
         <div class="rev-prompt">${promptHtml}</div>
         <div class="rev-answer" hidden><div class="rev-divider"></div><div class="rev-answer-body">${answerHtml}</div></div>
         <div class="rev-hint" data-hint>Tap to reveal</div>
