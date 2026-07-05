@@ -96,6 +96,7 @@
   .cr-text em{color:var(--muted)}
   .badge{font-size:9px;font-weight:800;letter-spacing:.4px;padding:3px 5px;border-radius:5px;background:var(--surface-2);color:var(--muted);flex-shrink:0}
   .badge.cloze{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+  .badge.initials{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
   .cr-due{font-size:11px;color:var(--muted);flex-shrink:0}
   .icon-btn{width:36px;height:36px;border:none;background:none;color:var(--muted);font-size:15px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
   .icon-btn:active{background:var(--surface-2);color:var(--again)}
@@ -105,12 +106,13 @@
   .seg{display:flex;background:var(--surface-2);border-radius:11px;padding:3px}
   .seg-btn{flex:1;border:none;background:none;color:var(--muted);min-height:40px;border-radius:8px;font-weight:600;font-size:14px}
   .seg-btn.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
-  .fields-standard,.fields-cloze{display:flex;flex-direction:column;gap:10px}
-  .fields-standard[hidden],.fields-cloze[hidden]{display:none}
+  .fields-standard,.fields-cloze,.fields-initials{display:flex;flex-direction:column;gap:10px}
+  .fields-standard[hidden],.fields-cloze[hidden],.fields-initials[hidden]{display:none}
   .fields-cloze .ghost.sm{align-self:flex-start}
   .inp{width:100%;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:11px;padding:12px;font-size:16px;resize:vertical;line-height:1.45}
   .inp:focus{outline:none;border-color:var(--accent)}
   .cloze-input{font-variant-ligatures:none}
+  .initials-preview{color:var(--muted)}
   .hint{font-size:12px;color:var(--muted);line-height:1.45}
   .hint.center{text-align:center;margin-top:6px}
   .editor-bar{position:sticky;bottom:0;display:flex;gap:8px;padding:14px 0 calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--bg) 35%);margin-top:6px}
@@ -182,19 +184,20 @@
  *
  * DATA MODEL (IndexedDB "srs-flashcards", schema v1)
  *   decks   { id, name, createdAt, updatedAt }
- *   cards   { id, deckId, type:'standard'|'cloze',
- *             front, back,            // standard
- *             text,                   // cloze source incl. {{c1::answer::hint}}
+ *   cards   { id, deckId, type:'standard'|'cloze'|'initials',
+ *             front, back,            // standard; initials generated front/source
+ *             text,                   // cloze source, or initials source text
  *             createdAt, updatedAt }
  *   items   { id, cardId, deckId,     // the SCHEDULING unit
- *             clozeIndex,             // null for standard, 1..n for each cloze
+ *             clozeIndex,             // null for standard/initials, 1..n for cloze
  *             due, interval(min), ease, reps, lapses, step, state,
  *             lastReviewed, lapsedInterval }
  *           indexes: deckId, cardId, due
  *   reviews { id, itemId, cardId, deckId, grade, at, before, after }
  *           indexes: itemId, deckId   (review history)
  *
- * One standard card -> one item. One cloze card -> one item per distinct cNN.
+ * One standard/initials card -> one item. One cloze card -> one item per
+ * distinct cNN.
  * Editing a cloze reconciles items: add new indices, drop removed ones, keep
  * the rest WITH their schedule -> no duplicate review items.
  *
@@ -314,6 +317,33 @@ function renderCloze(text, target, reveal){
   return out.replace(/\n/g, '<br>');
 }
 
+/* ---------- initials cards ---------- */
+function initialsPrompt(text){
+  return (text || '').replace(/[\p{L}\p{N}][\p{L}\p{M}\p{N}'’]*/gu,
+    word => [...word][0] + word.replace(/[\p{L}\p{M}\p{N}]/gu, ''));
+}
+function initialsSource(card){
+  return card.text || card.back || '';
+}
+function renderText(text){
+  return esc(text).replace(/\n/g, '<br>');
+}
+function cardTypeLabel(type){
+  if (type === 'cloze') return 'CLOZE';
+  if (type === 'initials') return 'INITIALS';
+  return 'BASIC';
+}
+function cardPreview(card){
+  if (card.type === 'cloze') return clozePlain(card.text);
+  if (card.type === 'initials') return card.front || initialsPrompt(initialsSource(card));
+  return card.front || '';
+}
+function editorFocusSelector(type){
+  if (type === 'cloze') return '[data-text]';
+  if (type === 'initials') return '[data-initials-text]';
+  return '[data-front]';
+}
+
 /* ---------- scheduler ---------- */
 function newItem(card, clozeIndex){
   return { id: uid(), cardId: card.id, deckId: card.deckId, clozeIndex,
@@ -363,7 +393,7 @@ function schedule(src, grade, now){
 /* ---------- item reconciliation (avoids duplicate cloze items) ---------- */
 async function syncItems(card){
   const existing = await getByIndex('items', 'cardId', card.id);
-  if (card.type === 'standard') {
+  if (card.type !== 'cloze') {
     if (!existing.some(i => i.clozeIndex == null)) await dbPut('items', newItem(card, null));
     for (const it of existing) if (it.clozeIndex != null) await dbDelete('items', it.id);
   } else {
@@ -560,11 +590,11 @@ async function screenDeck(deckId){
     body += emptyState('No cards', 'Add your first card to this deck.', 'Add card');
   } else {
     body += `<div class="card-list">` + cards.map(c => {
-      const prev = c.type === 'cloze' ? clozePlain(c.text) : (c.front || '');
+      const prev = cardPreview(c);
       const d = cardDue[c.id];
       const dueLabel = d == null ? '' : (d <= now ? 'due' : 'in ' + fmtInt((d - now) / 60000));
       return `<div class="card-row" data-id="${c.id}">
-        <div class="cr-main" data-edit><span class="badge ${c.type}">${c.type === 'cloze' ? 'CLOZE' : 'BASIC'}</span>
+        <div class="cr-main" data-edit><span class="badge ${c.type}">${cardTypeLabel(c.type)}</span>
         <span class="cr-text">${prev.trim() ? esc(prev) : '<em>empty</em>'}</span></div>
         <span class="cr-due">${dueLabel}</span>
         <button class="icon-btn" data-del aria-label="Delete card">&#10005;</button>
@@ -616,8 +646,9 @@ async function screenEditor(deckId, cardId){
       <div class="seg" role="tablist">
         <button class="seg-btn ${type === 'standard' ? 'on' : ''}" data-type="standard">Basic</button>
         <button class="seg-btn ${type === 'cloze' ? 'on' : ''}" data-type="cloze">Cloze</button>
+        <button class="seg-btn ${type === 'initials' ? 'on' : ''}" data-type="initials">Initials</button>
       </div>
-      <div class="fields-standard" ${type === 'cloze' ? 'hidden' : ''}>
+      <div class="fields-standard" ${type === 'standard' ? '' : 'hidden'}>
         <textarea class="inp" data-front rows="3" placeholder="Front" autocapitalize="sentences">${esc(card ? card.front : '')}</textarea>
         <textarea class="inp" data-back rows="3" placeholder="Back" autocapitalize="sentences">${esc(card ? card.back : '')}</textarea>
       </div>
@@ -626,6 +657,11 @@ async function screenEditor(deckId, cardId){
         <button class="ghost sm" data-cloze-btn>{{&nbsp;}} Make cloze</button>
         <div class="hint">Wrap an answer like {{c1::answer}}. Use c1, c2&hellip; for separate prompts; add a hint with {{c1::answer::hint}}.</div>
       </div>
+      <div class="fields-initials" ${type === 'initials' ? '' : 'hidden'}>
+        <textarea class="inp" data-initials-text rows="7" placeholder="Paste text" autocapitalize="sentences">${esc(card && card.type === 'initials' ? initialsSource(card) : '')}</textarea>
+        <textarea class="inp initials-preview" data-initials-preview rows="4" placeholder="Front preview" readonly></textarea>
+        <div class="hint">The front keeps punctuation and whitespace, replacing each word with its first letter.</div>
+      </div>
     </div>
     <div class="editor-bar">
       <button class="ghost" data-cancel>Cancel</button>
@@ -633,43 +669,65 @@ async function screenEditor(deckId, cardId){
       <button class="primary" data-save>Save</button>
     </div>`;
 
-  s.querySelectorAll('[data-type]').forEach(b => b.onclick = () => {
-    type = b.dataset.type;
+  const focusActiveEditor = () => s.querySelector(editorFocusSelector(type)) ?.focus();
+  const refreshInitialsPreview = () => {
+    const source = s.querySelector('[data-initials-text]').value;
+    s.querySelector('[data-initials-preview]').value = initialsPrompt(source);
+  };
+  const setType = nextType => {
+    type = nextType;
     s.querySelectorAll('[data-type]').forEach(x => x.classList.toggle('on', x.dataset.type === type));
     s.querySelector('.fields-standard').hidden = type !== 'standard';
     s.querySelector('.fields-cloze').hidden = type !== 'cloze';
-    setTimeout(() => (type === 'cloze' ? s.querySelector('[data-text]') : s.querySelector('[data-front]')).focus(), 10);
-  });
+    s.querySelector('.fields-initials').hidden = type !== 'initials';
+    if (type === 'initials') refreshInitialsPreview();
+    setTimeout(focusActiveEditor, 10);
+  };
+  s.querySelectorAll('[data-type]').forEach(b => b.onclick = () => setType(b.dataset.type));
   s.querySelector('[data-cloze-btn]').onclick = () => wrapCloze(s.querySelector('[data-text]'));
+  s.querySelector('[data-initials-text]').addEventListener('input', refreshInitialsPreview);
+  refreshInitialsPreview();
   s.querySelector('[data-cancel]').onclick = () => go('/deck/' + deckId);
 
   const save = async again => {
     const front = s.querySelector('[data-front]').value;
     const back  = s.querySelector('[data-back]').value;
     const text  = s.querySelector('[data-text]').value;
+    const initialsText = s.querySelector('[data-initials-text]').value;
+    let saveFront = front, saveBack = back, saveText = text;
     if (type === 'standard') {
       if (!front.trim() || !back.trim()) { toast('Front and back required'); return; }
-    } else if (parseCloze(text).length < 1) {
-      toast('Add at least one {{c1::…}}'); return;
+      saveText = '';
+    } else if (type === 'initials') {
+      if (!initialsText.trim()) { toast('Text required'); return; }
+      saveFront = initialsPrompt(initialsText);
+      saveBack = initialsText;
+      saveText = initialsText;
+    } else {
+      if (parseCloze(text).length < 1) { toast('Add at least one {{c1::…}}'); return; }
+      saveFront = '';
+      saveBack = '';
     }
     if (card) {
-      Object.assign(card, { type, front, back, text, updatedAt: Date.now() });
+      Object.assign(card, { type, front: saveFront, back: saveBack, text: saveText, updatedAt: Date.now() });
       await dbPut('cards', card); await syncItems(card);
       toast('Saved'); go('/deck/' + deckId);
     } else {
-      const nc = { id: uid(), deckId, type, front, back, text, createdAt: Date.now(), updatedAt: Date.now() };
+      const nc = { id: uid(), deckId, type, front: saveFront, back: saveBack, text: saveText, createdAt: Date.now(), updatedAt: Date.now() };
       await dbPut('cards', nc); await syncItems(nc); toast('Card added');
       if (again) {
         s.querySelector('[data-front]').value = '';
         s.querySelector('[data-back]').value = '';
         s.querySelector('[data-text]').value = '';
-        (type === 'cloze' ? s.querySelector('[data-text]') : s.querySelector('[data-front]')).focus();
+        s.querySelector('[data-initials-text]').value = '';
+        refreshInitialsPreview();
+        focusActiveEditor();
       } else go('/deck/' + deckId);
     }
   };
   s.querySelector('[data-save]').onclick = () => save(false);
   s.querySelector('[data-save-add]') ?.addEventListener('click', () => save(true));
-  setTimeout(() => (type === 'cloze' ? s.querySelector('[data-text]') : s.querySelector('[data-front]')) ?.focus(), 60);
+  setTimeout(focusActiveEditor, 60);
 }
 function wrapCloze(ta){
   const v = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
@@ -716,9 +774,13 @@ function renderReviewCard(deck, item, card){
   if (card.type === 'cloze') {
     promptHtml = renderCloze(card.text, item.clozeIndex, false);
     answerHtml = renderCloze(card.text, item.clozeIndex, true);
+  } else if (card.type === 'initials') {
+    const source = initialsSource(card);
+    promptHtml = renderText(card.front || initialsPrompt(source));
+    answerHtml = renderText(source);
   } else {
-    promptHtml = esc(card.front).replace(/\n/g, '<br>');
-    answerHtml = esc(card.back).replace(/\n/g, '<br>');
+    promptHtml = renderText(card.front);
+    answerHtml = renderText(card.back);
   }
   const gradeBtn = g => {
     const prev = schedule(item, g, Date.now());
