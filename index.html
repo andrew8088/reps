@@ -320,7 +320,7 @@ function renderCloze(text, target, reveal){
 /* ---------- initials cards ---------- */
 function initialsPrompt(text){
   return (text || '').replace(/[\p{L}\p{N}][\p{L}\p{M}\p{N}'’]*/gu,
-    word => [...word][0] + word.replace(/[\p{L}\p{M}\p{N}]/gu, ''));
+    word => [...word][0]);
 }
 function initialsSource(card){
   return card.text || card.back || '';
