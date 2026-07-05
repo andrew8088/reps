@@ -111,6 +111,8 @@
   .fields-cloze .ghost.sm{align-self:flex-start}
   .inp{width:100%;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:11px;padding:12px;font-size:16px;resize:vertical;line-height:1.45}
   .inp:focus{outline:none;border-color:var(--accent)}
+  .due-field{display:flex;flex-direction:column;gap:6px}
+  .due-label{font-size:12px;font-weight:650;color:var(--muted)}
   .cloze-input{font-variant-ligatures:none}
   .initials-preview{color:var(--muted)}
   .hint{font-size:12px;color:var(--muted);line-height:1.45}
@@ -244,6 +246,16 @@ function fmtInt(min){
   if (min < DAY * 30) return Math.round(min / DAY) + 'd';
   if (min < DAY * 365) return Math.round(min / DAY / 30) + 'mo';
   return (min / DAY / 365).toFixed(1) + 'y';
+}
+function toLocalDateTimeValue(ms){
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms), pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalDateTimeValue(value){
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isFinite(d.getTime()) ? d.getTime() : null;
 }
 
 let _toastTimer;
@@ -406,6 +418,10 @@ async function syncItems(card){
       if (it.clozeIndex == null || !indices.includes(it.clozeIndex)) await dbDelete('items', it.id);
     }
   }
+}
+async function setCardDue(cardId, due){
+  const items = await getByIndex('items', 'cardId', cardId);
+  for (const it of items) await dbPut('items', { ...it, due });
 }
 
 /* ---------- cascading deletes ---------- */
@@ -638,6 +654,10 @@ async function screenEditor(deckId, cardId){
   if (!deck) return screenNotFound();
   let card = null;
   if (cardId) { card = await dbGet('cards', cardId); if (!card) return screenNotFound(); }
+  const originalType = card ? card.type : null;
+  const editItems = cardId ? await getByIndex('items', 'cardId', cardId) : [];
+  const earliestDue = editItems.reduce((min, it) => min == null || it.due < min ? it.due : min, null);
+  const originalDueValue = toLocalDateTimeValue(earliestDue);
   let type = card ? card.type : 'standard';
 
   setTopbar({ title: cardId ? 'Edit card' : 'New card', back: '/deck/' + deckId });
@@ -664,6 +684,11 @@ async function screenEditor(deckId, cardId){
         <textarea class="inp initials-preview" data-initials-preview rows="4" placeholder="Front preview" readonly></textarea>
         <div class="hint">The front keeps punctuation and whitespace, replacing each word with its first letter.</div>
       </div>
+      ${cardId ? `<div class="due-field">
+        <label class="due-label" for="next-review">Next review</label>
+        <input class="inp" id="next-review" data-due type="datetime-local" value="${esc(originalDueValue)}">
+        <div class="hint">For cloze cards, changing this sets the next review for every cloze item on this card.</div>
+      </div>` : ''}
     </div>
     <div class="editor-bar">
       <button class="ghost" data-cancel>Cancel</button>
@@ -696,6 +721,10 @@ async function screenEditor(deckId, cardId){
     const back  = s.querySelector('[data-back]').value;
     const text  = s.querySelector('[data-text]').value;
     const initialsText = s.querySelector('[data-initials-text]').value;
+    const dueInput = s.querySelector('[data-due]');
+    const dueChanged = dueInput && dueInput.value !== originalDueValue;
+    const shouldSetDue = dueInput && (dueChanged || type !== originalType);
+    const dueAt = shouldSetDue ? fromLocalDateTimeValue(dueInput.value) : null;
     let saveFront = front, saveBack = back, saveText = text;
     if (type === 'standard') {
       if (!front.trim() || !back.trim()) { toast('Front and back required'); return; }
@@ -710,9 +739,11 @@ async function screenEditor(deckId, cardId){
       saveFront = '';
       saveBack = '';
     }
+    if (shouldSetDue && dueAt == null) { toast('Next review required'); return; }
     if (card) {
       Object.assign(card, { type, front: saveFront, back: saveBack, text: saveText, updatedAt: Date.now() });
       await dbPut('cards', card); await syncItems(card);
+      if (shouldSetDue) await setCardDue(card.id, dueAt);
       toast('Saved'); go('/deck/' + deckId);
     } else {
       const nc = { id: uid(), deckId, type, front: saveFront, back: saveBack, text: saveText, createdAt: Date.now(), updatedAt: Date.now() };
